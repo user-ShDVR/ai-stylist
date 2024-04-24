@@ -1,19 +1,19 @@
 import * as https from 'https';
 
 class GenerateImgUrl {
-    private readonly nmId: number;
-    private readonly size: string;
-    private readonly number: number;
-    private readonly format: string;
+    nmId;
+    size;
+    number;
+    format;
 
-    constructor({ nmId, size, number, format }: { nmId: number, size?: string, number?: number, format?: string }) {
+    constructor({ nmId, size, number, format }) {
         this.nmId = nmId;
         this.size = size ?? "big";
         this.number = number ?? 1;
         this.format = format ?? "webp";
     }
 
-    getHost(id: number) {
+    getHost(id) {
         const urlParts = [
             { range: [0, 143], url: "//basket-01.wb.ru" },
             { range: [144, 287], url: "//basket-02.wb.ru" },
@@ -37,7 +37,7 @@ class GenerateImgUrl {
         return url;
     }
 
-    url(): string {
+    url(){
         const vol = ~~(this.nmId / 1e5),
             part = ~~(this.nmId / 1e3);
         return `https:${this.getHost(vol)?.url}/vol${vol}/part${part}/${
@@ -46,26 +46,27 @@ class GenerateImgUrl {
     }
 }
 
-interface Product {
-    name: string;
-    imageUrl: string;
-    price: number;
-    productUrl: string;
-    id: string | number;
-}
-
-async function fetchAndWriteData(query: string): Promise<void> {
+export async function fetchAndWriteData(query) {
     const url = `https://search.wb.ru/exactmatch/ru/common/v5/search?appType=2&curr=rub&dest=-1257786&query=${query}&resultset=catalog&sort=popular&spp=30&suppressSpellcheck=false`;
-
     try {
         const data = await fetchData(url);
-        const products = parseData(data);
+        if (!data) {
+            console.error(`No products found for query: ${query}`);
+            return null;
+        }
+        const product = parseData(data);
+        if (!product) {
+            console.error(`No products found for query: ${query}`);
+            return null;
+        }
+
+        return product;
     } catch (error) {
         console.error(error);
     }
 }
 
-function fetchData(url: string): Promise<any> {
+function fetchData(url) {
     return new Promise((resolve, reject) => {
         https.get(url, (res) => {
             let data = '';
@@ -86,18 +87,18 @@ function fetchData(url: string): Promise<any> {
     });
 }
 
-function parseData(data: any): Product | null {
-    const productsArray: any[] = data.data.products;
+function parseData(data) {
+    const productsArray = data.data.products;
     if (productsArray.length === 0) {
         return null;
     }
 
     const item = productsArray.shift(); 
     const imgUrlGenerator = new GenerateImgUrl({ nmId: item.id });
-    const product: Product = {
+    console.log(item);
+    const product = {
         name: item.name,
         imageUrl: imgUrlGenerator.url(),
-        price: Math.ceil((item.sizes[0].price.product) / 100),
         productUrl: `https://www.wildberries.ru/catalog/${item.id}/detail.aspx`,
         id: item.id
     };
@@ -107,4 +108,4 @@ function parseData(data: any): Product | null {
 }
 
 
-fetchAndWriteData('шляпа');
+fetchAndWriteData('ботинки женские чёрные на молнии');
