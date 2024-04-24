@@ -95,7 +95,7 @@ function parseData(data) {
 
     const item = productsArray.shift(); 
     const imgUrlGenerator = new GenerateImgUrl({ nmId: item.id });
-    console.log(item);
+    // console.log(item);
     const product = {
         name: item.name,
         imageUrl: imgUrlGenerator.url(),
@@ -103,9 +103,9 @@ function parseData(data) {
         id: item.id
     };
 
-    console.log(product);
+    // console.log(product);
     return product;
 }
 
 
-fetchAndWriteData('ботинки женские чёрные на молнии');
+// fetchAndWriteData('ботинки женские чёрные на молнии');
