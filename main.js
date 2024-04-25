@@ -68,7 +68,6 @@ bot.on("photo", async (msg) => {
     });
 
     const data = JSON.parse(responseImage.choices[0].message.content)
-    console.log(data);
     const promises = data.outfits.map(async (outfit) => {
       const itemDetails = await Promise.all(
         outfit.items.map(async (item) => await fetchAndWriteData(item))
@@ -81,7 +80,7 @@ bot.on("photo", async (msg) => {
 
     const wbResponse = await Promise.all(promises);
 
-    const outfitsDescriptions = await wbResponse.map(async (outfit) => {
+    const outfitsDescriptions = wbResponse.map(async (outfit) => {
       const validItems = await filterValidImages(outfit.items);
       // Создаем массив сообщений для каждого образа
       const messages = validItems.map((item) => ({
@@ -92,10 +91,14 @@ bot.on("photo", async (msg) => {
         systemMessage: {
           role: "system",
           content: `
-        Твоя задача - по загруженным картинкам сделать текстовое описание образа.
-        Описание должно начинаться с "woman" и заканчиваться "in front of soft shadows on circular platform".
+        Твоя задача - по загруженным картинкам сделать текстовое описание образа очень подробным описывай так чтобы каждая деталь была понятна по смыслу.
+        Представь что этот образ будет генерировать нейросеть и надо чтобы она отрисовывала картинку так подробно насколько это возможно.
+        Описание должно начинаться с "white woman standing at full height" и заканчиваться "in front of soft shadows on circular platform".
+        Первая картинка это главный элемент одежды. 
+        Не используй '\n' как разделитель.
         После woman описывай сначала основной элемент одежды, потом описывай его компаньонов.
         Если картинка не содержит в себе одежды или товаров компаньонов то не добавляй её в образ
+        Пример: "white woman standing at full height in a dark blue dress with embroidery on the chest and a gag skirt with a black clutch bag with a gold chain in her hand and aviator glasses, in front of soft shadows on circular platform"
       `,
         },
         userMessage: {
@@ -103,11 +106,20 @@ bot.on("photo", async (msg) => {
           content: [
             {
               type: "text",
-              text: `woman ${outfit.base} in front of soft shadows on circular platform. ${outfit.description}`,
+              text: `Сгененрируй образ где основным элементом является ${outfit.base}. Образ для ${outfit.description} и должен содержать ${validItems.map((item)=> item.name).join(", ")}.`,
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: fileUrl,
+              },
             },
             ...messages,
           ],
         },
+        outfitName: outfit.name,
+        outfitDescription: outfit.description,
+        items: validItems,
       };
     });
 
@@ -117,7 +129,6 @@ bot.on("photo", async (msg) => {
           const responses = await Promise.all(
               outfitDescriptions.map(async (descriptionPromise) => {
                   const description = await descriptionPromise; // Убедитесь, что промис разрешен
-                  await writeToFile('./outputs/description.txt', JSON.stringify(description) + '\n');
                   if (!description || !description.systemMessage || !description.userMessage) return null; // Проверка на null и наличие необходимых полей
   
                   const response = await openai.chat.completions.create({
@@ -127,10 +138,12 @@ bot.on("photo", async (msg) => {
                           description.userMessage // Убедитесь, что userMessage также формируется корректно
                       ],
                   });
-                  return response;
+                  return {...response, items: description.items, outfitName: description.outfitName, outfitDescription: description.outfitDescription};
               })
           );
-          return responses.map((response) => response.choices[0].message.content);
+          return responses.map((response) => {
+            return { outfitName: response.outfitName, outfitDescription: response.outfitDescription, items: response.items, prompt: response.choices[0].message.content}
+          });
       } catch (error) {
           await writeToFile('./outputs/errors.txt', `Ошибка при отправке данных в OpenAI: ${error}\n`); // Запись ошибки в файл
       }
@@ -139,11 +152,48 @@ bot.on("photo", async (msg) => {
 
     // Вызываем функцию отправки данных
     const responseArr = await sendDescriptionsToChatGPT(outfitsDescriptions);
-    const images = responseArr.map(async (response) => {
-      await FlairImgGenerator(response);
+    const imagesArr = await Promise.all(
+      responseArr.map(async (response) => {
+        const flairResponse = await FlairImgGenerator(response.prompt, fileUrl);
+        if (flairResponse == null) {
+          return null;
+        }
+        return {
+          ...response,
+          image: flairResponse[0]
+        }
+      })
+    );
+    imagesArr.forEach((image) => {
+      const itemDescriptions = image.items.map((item) => {
+        // Экранирование всех специальных символов в названии и URL
+        const nameEscaped = item.name.replace(/[-_.!()*]/g, '\\$&');
+        const imageUrlEscaped = item.productUrl.replace(/[-_.!()*]/g, '\\$&');
+        return `[${nameEscaped}](${imageUrlEscaped})`;
+      }).join("\n");
+    
+      // Экранирование специальных символов в описании образа и компаньонов
+      const outfitNameEscaped = image.outfitName.replace(/[-_.!()*]/g, '\\$&');
+      const outfitDescriptionEscaped = image.outfitDescription.replace(/[-_.!()*]/g, '\\$&');
+    
+      const messageText = `
+    Образ: ${outfitNameEscaped}
+    Описание: ${outfitDescriptionEscaped}
+    Компаньоны: \n ${itemDescriptions}
+      `;
+    
+      // Отправка изображения
+      bot.sendPhoto(chatId, image.image).then(() => {
+        // Отправка текстового сообщения после успешной отправки фото
+        bot.sendMessage(chatId, messageText.trim(), {parse_mode: 'MarkdownV2'});
+      }).catch((error) => {
+        console.error('Ошибка при отправке фото или текста: ', error);
+      });
     });
+    
+
+
     console.log("Done!");
-    console.log(wbResponse);
     // Отправка ответа
     // bot.sendMessage(chatId, response.choices[0].message.content);
   } catch (error) {
@@ -196,9 +246,8 @@ async function FlairImgGenerator(prompt) {
         const response = await axios.post(url, {
             pipeline_type: "default",
             prompt,
-            negative_prompt: "blurry, cropped, ugly, chaotic, random, colorful, cluttered, distorted, drawing, painting, graphic design, 3d rendering, fake, plastic",
             guidance_scale: 7.5,
-            num_inference_steps: 25,
+            num_inference_steps: 20,
             width: 1024,
             height: 1024,
             seed: 42,
@@ -210,12 +259,14 @@ async function FlairImgGenerator(prompt) {
         });
 
         if (response.status === 200) {
-            console.log(response.data.images);
-            // return response.data.images;
+            return response.data.images;
         } else {
-            console.error('Error:', response.status, response.data);
+            await writeToFile('./outputs/errors.txt', `Ошибка при отправке данных в Flair: ${error}\n`); // Запись ошибки в файл
+            return FlairImgGenerator(prompt)
         }
     } catch (error) {
-        console.error('Error:', error.response || error.request || error.message);
+        // console.error('Error:', error.response || error.request || error.message);
+        await writeToFile('./outputs/errors.txt', `Ошибка при отправке данных в Flair: ${error}\n`); // Запись ошибки в файл
+        return FlairImgGenerator(prompt)
     }
 }
